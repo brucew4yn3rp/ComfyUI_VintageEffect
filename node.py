@@ -47,6 +47,13 @@ class VintageEffect:
                     "default": "Faded",
                     "tooltip": "Color grading preset"
                 }),
+                "color_grade_strength": ("INT", {
+                    "default": 50,
+                    "min": 0,
+                    "max": 100,
+                    "step": 1,
+                    "tooltip": "Strength of color grade effect. 0 = disabled, 100 = full effect (0-100)"
+                }),
                 "saturation": ("INT", {
                     "default": 70,
                     "min": 0,
@@ -63,7 +70,7 @@ class VintageEffect:
     DESCRIPTION = "Apply vintage/retro effects with JPG compression artifacts, film grain, vignette, and color grading."
 
     def apply_vintage(self, images, quality=70, passes=1, grain_strength=5, 
-                     vignette_strength=0, color_grade="Faded", saturation=70):
+                     vignette_strength=0, color_grade="Faded", color_grade_strength=100, saturation=70):
         """
         Apply vintage effect to input images.
         
@@ -74,6 +81,7 @@ class VintageEffect:
             grain_strength: Strength of grain effect (0-100, 0 = disabled)
             vignette_strength: Strength of vignette effect (0-100, 0 = disabled)
             color_grade: Color grading preset
+            color_grade_strength: Strength of color grade (0-100)
             saturation: Color saturation (0-200, 100 = original)
         
         Returns:
@@ -84,6 +92,7 @@ class VintageEffect:
         saturation_actual = saturation / 100.0  # Convert to 0.0-2.0 range
         vignette_actual = vignette_strength / 100.0  # Convert to 0.0-1.0 range
         grain_actual = grain_strength / 2.0  # Convert to 0-50 range (divide by 2)
+        color_grade_actual = color_grade_strength / 100.0  # Convert to 0.0-1.0 range
         
         result_images = []
         
@@ -99,7 +108,7 @@ class VintageEffect:
             
             # Apply color grading and saturation
             if color_grade != "None" or saturation != 100:
-                img_pil = self._apply_color_effects(img_pil, color_grade, saturation_actual)
+                img_pil = self._apply_color_effects(img_pil, color_grade, saturation_actual, color_grade_actual)
             
             # Add film grain before compression
             if grain_strength > 0:
@@ -126,14 +135,16 @@ class VintageEffect:
         
         return (result_batch,)
     
-    def _apply_color_effects(self, img, color_grade, saturation):
-        """Apply color grading and saturation adjustments."""
+    def _apply_color_effects(self, img, color_grade, saturation, strength=1.0):
+        """Apply color grading and saturation adjustments with controllable strength."""
+        original_img = img.copy()
+        
         # Adjust saturation first
         if saturation != 1.0:
             enhancer = ImageEnhance.Color(img)
             img = enhancer.enhance(saturation)
         
-        # Apply color grade preset
+        # Apply color grade preset with full strength
         if color_grade == "Warm":
             # Boost reds/yellows, reduce blues (70s/80s photos)
             img_array = np.array(img, dtype=np.float32)
@@ -169,6 +180,15 @@ class VintageEffect:
             img_array[:,:,1] = np.clip(sepia_g, 0, 255)
             img_array[:,:,2] = np.clip(sepia_b, 0, 255)
             img = Image.fromarray(img_array.astype(np.uint8))
+        
+        # Blend graded image with original based on strength
+        if strength < 1.0 and color_grade != "None":
+            img_array = np.array(img, dtype=np.float32)
+            original_array = np.array(original_img, dtype=np.float32)
+            
+            # Blend: result = original * (1 - strength) + graded * strength
+            blended = original_array * (1.0 - strength) + img_array * strength
+            img = Image.fromarray(blended.astype(np.uint8))
         
         return img
     
