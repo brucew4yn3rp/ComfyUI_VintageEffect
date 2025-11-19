@@ -61,7 +61,7 @@ class VintageEffect:
                     "step": 1,
                     "tooltip": "Color saturation (0 = grayscale, 100 = original, 200 = max boost)"
                 }),
-                "blur_type": (["None", "Gaussian", "Box", "Motion", "Radial", "Lens", "Soft Focus"], {
+                "blur_type": (["None", "Gaussian", "Box", "Motion Horizontal", "Motion Vertical", "Radial", "Lens", "Soft Focus"], {
                     "default": "None",
                     "tooltip": "Type of blur to apply"
                 }),
@@ -178,14 +178,30 @@ class VintageEffect:
             radius = max(1, int(strength / 5.0))  # 1-20 range
             return img.filter(ImageFilter.BoxBlur(radius=radius))
         
-        elif blur_type == "Motion":
-            # Motion blur - simulates camera movement
+        elif blur_type == "Motion Horizontal":
+            # Horizontal motion blur - simulates left-right camera movement
             img_array = np.array(img, dtype=np.float32)
             kernel_size = max(3, int(strength / 3.0))  # 3-33 range
             
             # Create horizontal motion blur kernel
             kernel = np.zeros((kernel_size, kernel_size))
             kernel[kernel_size // 2, :] = 1.0 / kernel_size
+            
+            # Apply convolution for each channel
+            from scipy.ndimage import convolve
+            for i in range(img_array.shape[2]):
+                img_array[:, :, i] = convolve(img_array[:, :, i], kernel, mode='reflect')
+            
+            return Image.fromarray(np.clip(img_array, 0, 255).astype(np.uint8))
+        
+        elif blur_type == "Motion Vertical":
+            # Vertical motion blur - simulates up-down camera movement
+            img_array = np.array(img, dtype=np.float32)
+            kernel_size = max(3, int(strength / 3.0))  # 3-33 range
+            
+            # Create vertical motion blur kernel
+            kernel = np.zeros((kernel_size, kernel_size))
+            kernel[:, kernel_size // 2] = 1.0 / kernel_size
             
             # Apply convolution for each channel
             from scipy.ndimage import convolve
