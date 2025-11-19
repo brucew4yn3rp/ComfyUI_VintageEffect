@@ -1,13 +1,13 @@
 import torch
 import numpy as np
-from PIL import Image, ImageEnhance
+from PIL import Image, ImageEnhance, ImageFilter
 import io
 
 
 class VintageEffect:
     """
     ComfyUI node that applies vintage/retro effects through JPG compression,
-    color grading, film grain, and vignette to emulate old photo aesthetics.
+    color grading, film grain, vignette, and blur to emulate old photo aesthetics.
     """
     
     @classmethod
@@ -61,16 +61,28 @@ class VintageEffect:
                     "step": 1,
                     "tooltip": "Color saturation (0 = grayscale, 100 = original, 200 = max boost)"
                 }),
+                "blur_type": (["None", "Gaussian", "Box", "Motion", "Radial", "Lens", "Soft Focus"], {
+                    "default": "None",
+                    "tooltip": "Type of blur to apply"
+                }),
+                "blur_strength": ("INT", {
+                    "default": 0,
+                    "min": 0,
+                    "max": 100,
+                    "step": 1,
+                    "tooltip": "Strength of blur effect. Set to 0 to disable (0-100)"
+                }),
             },
         }
     
     RETURN_TYPES = ("IMAGE",)
     FUNCTION = "apply_vintage"
     CATEGORY = "image/effects"
-    DESCRIPTION = "Apply vintage/retro effects with JPG compression artifacts, film grain, vignette, and color grading."
+    DESCRIPTION = "Apply vintage/retro effects with JPG compression artifacts, film grain, vignette, blur, and color grading."
 
     def apply_vintage(self, images, quality=70, passes=1, grain_strength=5, 
-                     vignette_strength=0, color_grade="Faded", color_grade_strength=100, saturation=70):
+                     vignette_strength=0, color_grade="Faded", color_grade_strength=100, 
+                     saturation=70, blur_type="None", blur_strength=0):
         """
         Apply vintage effect to input images.
         
@@ -83,6 +95,8 @@ class VintageEffect:
             color_grade: Color grading preset
             color_grade_strength: Strength of color grade (0-100)
             saturation: Color saturation (0-200, 100 = original)
+            blur_type: Type of blur effect
+            blur_strength: Strength of blur (0-100)
         
         Returns:
             Processed images tensor
@@ -114,6 +128,10 @@ class VintageEffect:
             if grain_strength > 0:
                 img_pil = self._add_film_grain(img_pil, grain_actual)
             
+            # Apply blur effect
+            if blur_type != "None" and blur_strength > 0:
+                img_pil = self._apply_blur(img_pil, blur_type, blur_strength)
+            
             # Apply vignette effect
             if vignette_strength > 0:
                 img_pil = self._apply_vignette(img_pil, vignette_actual)
@@ -134,6 +152,136 @@ class VintageEffect:
         result_batch = torch.stack(result_images)
         
         return (result_batch,)
+    
+    def _apply_blur(self, img, blur_type, strength):
+        """
+        Apply various types of blur effects.
+        
+        Args:
+            img: PIL Image
+            blur_type: Type of blur to apply
+            strength: Blur strength (0-100)
+        """
+        if strength == 0 or blur_type == "None":
+            return img
+        
+        # Convert strength (0-100) to appropriate radius/parameters
+        # Different blur types need different scaling
+        
+        if blur_type == "Gaussian":
+            # Gaussian blur - smooth, natural blur
+            radius = strength / 5.0  # 0-20 range
+            return img.filter(ImageFilter.GaussianBlur(radius=radius))
+        
+        elif blur_type == "Box":
+            # Box blur - uniform averaging, creates softer vintage look
+            radius = max(1, int(strength / 5.0))  # 1-20 range
+            return img.filter(ImageFilter.BoxBlur(radius=radius))
+        
+        elif blur_type == "Motion":
+            # Motion blur - simulates camera movement
+            img_array = np.array(img, dtype=np.float32)
+            kernel_size = max(3, int(strength / 3.0))  # 3-33 range
+            
+            # Create horizontal motion blur kernel
+            kernel = np.zeros((kernel_size, kernel_size))
+            kernel[kernel_size // 2, :] = 1.0 / kernel_size
+            
+            # Apply convolution for each channel
+            from scipy.ndimage import convolve
+            for i in range(img_array.shape[2]):
+                img_array[:, :, i] = convolve(img_array[:, :, i], kernel, mode='reflect')
+            
+            return Image.fromarray(np.clip(img_array, 0, 255).astype(np.uint8))
+        
+        elif blur_type == "Radial":
+            # Radial blur - blur radiating from center (zoom effect)
+            img_array = np.array(img, dtype=np.float32)
+            height, width = img_array.shape[:2]
+            center_y, center_x = height / 2, width / 2
+            
+            # Number of samples for radial blur
+            samples = max(3, int(strength / 10.0))  # 3-10 samples
+            blur_amount = strength / 500.0  # 0-0.2 range
+            
+            result = np.zeros_like(img_array)
+            
+            for i in range(samples):
+                scale = 1.0 - (i * blur_amount / samples)
+                
+                # Create scaled coordinates
+                y_indices = np.arange(height)
+                x_indices = np.arange(width)
+                
+                # Scale from center
+                new_y = ((y_indices - center_y) * scale + center_y).astype(np.float32)
+                new_x = ((x_indices - center_x) * scale + center_x).astype(np.float32)
+                
+                # Clip to valid range
+                new_y = np.clip(new_y, 0, height - 1)
+                new_x = np.clip(new_x, 0, width - 1)
+                
+                # Simple nearest neighbor sampling
+                new_y_int = new_y.astype(np.int32)
+                new_x_int = new_x.astype(np.int32)
+                
+                # Add sampled image
+                result += img_array[new_y_int[:, np.newaxis], new_x_int[np.newaxis, :]]
+            
+            result /= samples
+            return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
+        
+        elif blur_type == "Lens":
+            # Lens blur - simulates depth of field with sharp center
+            img_array = np.array(img, dtype=np.float32)
+            height, width = img_array.shape[:2]
+            
+            # Create radial distance mask
+            center_y, center_x = height / 2, width / 2
+            Y, X = np.ogrid[:height, :width]
+            dist_from_center = np.sqrt((X - center_x)**2 + (Y - center_y)**2)
+            max_dist = np.sqrt(center_x**2 + center_y**2)
+            dist_normalized = dist_from_center / max_dist
+            
+            # Apply variable blur based on distance from center
+            # Center stays sharp, edges get progressively blurrier
+            blur_amount = (dist_normalized ** 1.5) * (strength / 5.0)
+            
+            # Apply Gaussian blur and blend based on distance
+            blurred = np.array(img.filter(ImageFilter.GaussianBlur(radius=strength/5.0)))
+            
+            # Create blend mask
+            blend_mask = np.clip(blur_amount, 0, 1)
+            if len(img_array.shape) == 3:
+                blend_mask = blend_mask[:, :, np.newaxis]
+            
+            # Blend sharp center with blurred edges
+            result = img_array * (1 - blend_mask) + blurred * blend_mask
+            return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
+        
+        elif blur_type == "Soft Focus":
+            # Soft focus - dreamy, glowing effect (like old portrait lenses)
+            # Combines blur with brightness for a soft, ethereal look
+            radius = strength / 4.0  # 0-25 range
+            
+            # Create blurred version
+            blurred = img.filter(ImageFilter.GaussianBlur(radius=radius))
+            
+            # Blend original with blurred using screen blend mode for glow
+            img_array = np.array(img, dtype=np.float32)
+            blurred_array = np.array(blurred, dtype=np.float32)
+            
+            # Screen blend: 1 - (1-a)*(1-b) scaled to 0-255
+            blend_strength = min(0.6, strength / 150.0)  # 0-0.6 range
+            
+            # Apply soft blend
+            result = img_array * (1 - blend_strength) + (
+                255 - (255 - img_array) * (255 - blurred_array) / 255
+            ) * blend_strength
+            
+            return Image.fromarray(np.clip(result, 0, 255).astype(np.uint8))
+        
+        return img
     
     def _apply_color_effects(self, img, color_grade, saturation, strength=1.0):
         """Apply color grading and saturation adjustments with controllable strength."""
