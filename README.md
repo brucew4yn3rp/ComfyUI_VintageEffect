@@ -1,4 +1,4 @@
-## ComfyUI node that applies vintage/retro effects through JPG compression, color grading, film grain, and vignette to emulate old photo aesthetics.
+## ComfyUI node that applies vintage/retro effects through JPG compression, color grading, film grain, and vignette to emulate realistic photo aesthetics.
 
 <img width="1684" height="780" alt="workflow" src="https://github.com/user-attachments/assets/83f5b134-5b3d-48b8-a81a-a964d14e374c" />
 
